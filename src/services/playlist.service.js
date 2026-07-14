@@ -133,7 +133,7 @@ const removeSongFromPlaylistService = async ({
  */
 const getMyPlaylistsService = async (userId) => {
     return await Playlist.find({ user: userId })
-        .populate('songs', 'title uri');
+        .populate('songs', 'title ');
 };
 
 /**
@@ -141,18 +141,26 @@ const getMyPlaylistsService = async (userId) => {
  * 📄 GET BY ID
  * =========================
  */
-const getPlaylistByIdService = async (playlistId) => {
+const getPlaylistByIdService = async (playlistId, userId) => {
 
     if (!mongoose.Types.ObjectId.isValid(playlistId)) {
         throw new AppError('Invalid playlistId', 400);
     }
 
     const playlist = await Playlist.findById(playlistId)
-        .populate('songs', 'title uri artist')
+        .populate('songs', 'title  artist')
         .populate('user', 'username avatar');
 
     if (!playlist) {
         throw new AppError('Playlist not found', 404);
+    }
+
+    // ✅ FIX: enforce privacy
+    if (
+        !playlist.isPublic &&
+        playlist.user._id.toString() !== userId.toString()
+    ) {
+        throw new AppError('Unauthorized access', 403);
     }
 
     return playlist;

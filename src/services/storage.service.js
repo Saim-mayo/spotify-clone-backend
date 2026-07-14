@@ -1,19 +1,74 @@
+const ImageKit = require("@imagekit/nodejs");
+const path = require("path");
 
-const  ImageKit  = require("@imagekit/nodejs");
+if (
+    !process.env.IMAGE_KIT_PUBLIC_KEY ||
+    !process.env.IMAGE_KIT_PRIVATE_KEY ||
+    !process.env.IMAGE_KIT_URL_ENDPOINT
+) {
+    throw new Error("ImageKit configuration missing");
+}
+
 const imagekitClient = new ImageKit({
     publicKey: process.env.IMAGE_KIT_PUBLIC_KEY,
     privateKey: process.env.IMAGE_KIT_PRIVATE_KEY,
     urlEndpoint: process.env.IMAGE_KIT_URL_ENDPOINT
 });
 
-async function uploadFile(fileBuffer, fileName) {
+async function uploadFile(
+    fileBuffer,
+    fileName,
+    folder = "ytmusic-clone"
+) {
+
+    if (!fileBuffer)
+        throw new Error("Missing file");
+
+    const safeName = path
+        .basename(fileName)
+        .replace(/[^a-zA-Z0-9._-]/g, "_");
+
     const result = await imagekitClient.files.upload({
-        file: Buffer.from(fileBuffer), // Convert buffer to base64 string
-        fileName: "music_" + Date.now() + "_" + fileName,   
-        folder: "ytmusic-clone/music"
+
+        file: fileBuffer.toString("base64"),
+
+        fileName: `${Date.now()}_${safeName}`,
+
+        folder
     });
 
-    return result;
+    return {
+
+        fileId: result.fileId,
+
+        filePath: result.filePath,
+
+        url: result.url
+
+    };
+
 }
 
-module.exports = { uploadFile };
+/*
+    DO NOT expose ImageKit URLs.
+
+    Backend will proxy every request.
+*/
+function getInternalFileUrl(filePath) {
+
+    if (!filePath)
+        throw new Error("Missing filePath");
+
+    return `${process.env.IMAGE_KIT_URL_ENDPOINT}${filePath}`;
+
+}
+
+module.exports = {
+
+    uploadFile,
+
+    getInternalFileUrl,
+
+    imagekitClient
+
+};

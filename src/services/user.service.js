@@ -1,89 +1,299 @@
-const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+
 const userModel = require('../models/user.model');
+
 const AppError = require('../utils/appError');
+
 const { uploadFile } = require('./storage.service');
 
-/**
- * =========================
- * 👤 GET PROFILE
- * =========================
- */
+const { getPlanFeatures } = require('../utils/accessControl');
+
+const Download = require('../models/download.model');
+
+
+// =====================================
+// GET PROFILE
+// =====================================
+
 const getMyProfileService = async (userId) => {
 
-   const user = await userModel.findById(userId)
+   const user = await userModel
+      .findById(userId)
       .select('-password -refreshToken');
 
    if (!user) {
-      throw new AppError('User not found', 404);
+
+      throw new AppError(
+         'User not found',
+         404
+      );
+
    }
 
    return user;
 };
 
-/**
- * =========================
- * ✏️ UPDATE PROFILE
- * =========================
- */
-const updateMyProfileService = async (userId, data) => {
 
-   const user = await userModel.findById(userId);
+// =====================================
+// UPDATE PROFILE
+// =====================================
+
+const updateMyProfileService = async (
+
+   userId,
+
+   data
+
+) => {
+
+   const user = await userModel.findById(
+      userId
+   );
 
    if (!user) {
-      throw new AppError('User not found', 404);
+
+      throw new AppError(
+         'User not found',
+         404
+      );
+
    }
 
-   if (data.username) user.username = data.username;
-   if (data.bio) user.bio = data.bio;
+   // ==========================
+   // USERNAME UPDATE
+   // ==========================
+
+   if (data.username) {
+
+      const username =
+         data.username.trim();
+
+      const existingUser =
+         await userModel.findOne({
+
+            username,
+
+            _id: { $ne: userId }
+
+         });
+
+      if (existingUser) {
+
+         throw new AppError(
+
+            'Username already taken',
+
+            409
+
+         );
+
+      }
+
+      user.username = username;
+
+   }
+
+   // ==========================
+   // BIO UPDATE
+   // ==========================
+
+   if (typeof data.bio === 'string') {
+
+      user.bio =
+         data.bio.trim();
+
+   }
 
    await user.save();
 
    return {
-      username: user.username,
-      bio: user.bio
+
+      username:
+         user.username,
+
+      bio:
+         user.bio,
+
+      avatar:
+         user.avatar
+
    };
+
 };
 
-/**
- * =========================
- * 🖼️ UPLOAD AVATAR (FIXED)
- * =========================
- */
-const uploadAvatarService = async (userId, file) => {
+// =====================================
+// UPLOAD AVATAR
+// =====================================
+
+const uploadAvatarService = async (
+
+   userId,
+
+   file
+
+) => {
 
    if (!file || !file.buffer) {
-      throw new AppError('Avatar file is required', 400);
+
+      throw new AppError(
+
+         'Avatar file is required',
+
+         400
+
+      );
+
    }
 
-   const user = await userModel.findById(userId);
+   const user = await userModel.findById(
+      userId
+   );
 
    if (!user) {
-      throw new AppError('User not found', 404);
+
+      throw new AppError(
+         'User not found',
+         404
+      );
+
    }
 
-   let base64;
+   const result = await uploadFile(
 
-   try {
-      base64 = file.buffer.toString('base64');
-   } catch (err) {
-      throw new AppError('File processing failed', 500);
-   }
+      file.buffer,
 
-   const result = await uploadFile(base64, file.originalname);
+      file.originalname,
 
-   // safety check (important)
+      'ytmusic-clone/avatars'
+
+   );
+
    if (!result?.url) {
-      throw new AppError('Avatar upload failed', 500);
+
+      throw new AppError(
+
+         'Avatar upload failed',
+
+         500
+
+      );
+
    }
 
    user.avatar = result.url;
+
    await user.save();
 
-   return { avatar: user.avatar };
+   return {
+
+      avatar:
+         user.avatar
+
+   };
+
+};
+
+
+// =====================================
+// SET PASSWORD
+// =====================================
+
+const setPasswordService = async (
+
+   userId,
+
+   password
+
+) => {
+
+   const user = await userModel.findById(
+      userId
+   );
+
+   if (!user) {
+
+      throw new AppError(
+         'User not found',
+         404
+      );
+
+   }
+
+   // =====================================
+   // PASSWORD ALREADY EXISTS
+   // =====================================
+
+   if (user.password) {
+
+      throw new AppError(
+
+         'Password already exists',
+
+         400
+
+      );
+
+   }
+
+   const hashedPassword =
+
+      await bcrypt.hash(
+
+         password,
+
+         10
+
+      );
+
+   user.password =
+      hashedPassword;
+
+   await user.save();
+
+   return {
+
+      success: true
+
+   };
+
+};
+
+// =====================================
+// GET FEATURE FLAGS (ads / downloads / play limit)
+// =====================================
+const getMyFeatureFlagsService = async (user) => {
+
+   const features = getPlanFeatures(user);
+
+   let downloadsUsed = 0;
+
+   if (features.maxDownloads !== null) {
+      downloadsUsed = await Download.countDocuments({ user: user.userId });
+   }
+
+   return {
+      plan: user.subscription.plan,
+      showAds: !features.adFree,
+      canDownload: features.canDownload,
+      maxDownloads: features.maxDownloads,          // null = unlimited
+      downloadsUsed,
+      downloadsRemaining: features.maxDownloads === null
+         ? null
+         : Math.max(features.maxDownloads - downloadsUsed, 0),
+      dailyPlayLimit: features.dailyPlayLimit        // null = unlimited
+   };
 };
 
 module.exports = {
+
    getMyProfileService,
+
    updateMyProfileService,
-   uploadAvatarService
+
+   uploadAvatarService,
+
+   setPasswordService,
+
+   getMyFeatureFlagsService
+
 };

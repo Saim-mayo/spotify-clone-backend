@@ -1,5 +1,6 @@
 const asyncHandler = require('../utils/asyncHandler');
-const { validationResult } = require('express-validator');
+const axios = require('axios');
+const AppError = require('../utils/appError');
 const {
    createSongService,
    playSongService,
@@ -13,12 +14,139 @@ const {
    getUserHistoryService
 } = require('../services/music.service');
 
-// 🎵 create song
+const {
+   getInternalFileUrl
+} = require('../services/storage.service');
+const {
+   recordDownload,
+   getUserDownloads
+
+} = require('../services/download.service');
+
+// =====================================
+// 🎯 SECURE AUDIO DELIVERY ENGINE (FIXED)
+// =====================================
+const handleAudioDelivery = async (req, res, mode = 'stream') => {
+
+   const songId = req.params.songId;
+
+   // ===============================
+   // 🔒 VALIDATE SONG
+   // ===============================
+   const song = req.song;
+
+   if (!song) {
+      throw new AppError('Song not found', 404);
+   }
+
+   if (!song.filePath) {
+      throw new AppError('File path missing', 400);
+   }
+
+
+
+   // ===============================
+   // 🔐 GENERATE SIGNED URL
+   // ===============================
+   const mediaUrl = getInternalFileUrl(song.filePath);
+
+   // ===============================
+   // 🔒 SSRF PROTECTION (SIMPLE + STRONG)
+   // ===============================
+   if (!mediaUrl.startsWith(process.env.IMAGE_KIT_URL_ENDPOINT)) {
+      throw new AppError('Invalid file source', 400);
+   }
+
+   // =====================================
+   // ⬇ DOWNLOAD MODE
+   // =====================================
+   if (mode === "download") {
+
+      const response = await axios({
+         method: "GET",
+         url: mediaUrl,
+         responseType: "stream"
+      });
+
+      res.writeHead(200, {
+
+         "Content-Type": "application/octet-stream",
+
+         "Content-Disposition":
+            `attachment; filename="${song.title}.mp3"`,
+
+         "Content-Length":
+            response.headers["content-length"],
+
+         "Cache-Control":
+            "private, no-store",
+
+         "X-Content-Type-Options":
+            "nosniff"
+
+      });
+
+      return response.data.pipe(res);
+   }
+
+   // =====================================
+   // 🎧 STREAM MODE
+   // =====================================
+
+   const range = req.headers.range;
+
+   if (!range) {
+      throw new AppError('Range header required', 416);
+   }
+   // Allow: bytes=0-   bytes=0-100   bytes=500-1000
+   if (!/^bytes=\d+-\d*$/.test(range)) {
+      throw new AppError('Invalid range header', 400);
+   }
+
+   const head = await axios.head(mediaUrl);
+   const fileSize = parseInt(head.headers['content-length'], 10);
+
+   if (!fileSize) {
+      throw new AppError('Unable to determine file size', 500);
+   }
+
+   const CHUNK_SIZE = 1 * 1024 * 1024;
+
+   const start = Number(range.replace(/\D/g, ''));
+
+   if (start >= fileSize) {
+      throw new AppError('Range not satisfiable', 416);
+   }
+
+   const end = Math.min(start + CHUNK_SIZE, fileSize - 1);
+   const contentLength = end - start + 1;
+
+   res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': contentLength,
+      'Content-Type': 'audio/mpeg'
+   });
+
+   const stream = await axios({
+      method: 'GET',
+      url: mediaUrl,
+      responseType: 'stream',
+      headers: {
+         Range: `bytes=${start}-${end}`
+      }
+   });
+
+   stream.data.pipe(res);
+};
+
+// =====================================
+// 🎵 CREATE SONG
+// =====================================
 const createSong = asyncHandler(async (req, res) => {
 
-   const errors = validationResult(req);
-   if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+   if (!req.file) {
+      throw new AppError('Audio file is required', 400);
    }
 
    const music = await createSongService({
@@ -33,7 +161,9 @@ const createSong = asyncHandler(async (req, res) => {
    });
 });
 
-// ▶ play song
+// =====================================
+// ▶ PLAY SONG
+// =====================================
 const playSong = asyncHandler(async (req, res) => {
 
    const song = await playSongService({
@@ -47,10 +177,46 @@ const playSong = asyncHandler(async (req, res) => {
    });
 });
 
-// 🔍 search songs
+// =====================================
+// 🎧 STREAM SONG
+// =====================================
+const streamSong = asyncHandler(async (req, res) => {
+   return handleAudioDelivery(req, res, 'stream');
+});
+
+// =====================================
+// 📥 DOWNLOAD SONG
+// =====================================
+const downloadSong = asyncHandler(async (req, res) => {
+
+   await recordDownload({
+
+      user: req.user,
+
+      songId: req.song._id,
+
+      ipAddress: req.ip,
+
+      userAgent: req.get('user-agent') || ''
+
+   });
+
+   return handleAudioDelivery(req, res, 'download');
+
+});
+
+// =====================================
+// 🔍 SEARCH SONGS
+// =====================================
 const searchSongs = asyncHandler(async (req, res) => {
 
-   const songs = await searchSongsService(req.query.q);
+   const query = (req.query.q || '').trim();
+
+   if (!query) {
+      throw new AppError('Search query required', 400);
+   }
+
+   const songs = await searchSongsService(query);
 
    return res.status(200).json({
       total: songs.length,
@@ -58,10 +224,18 @@ const searchSongs = asyncHandler(async (req, res) => {
    });
 });
 
-// 👤 search artists
+// =====================================
+// 👤 SEARCH ARTISTS
+// =====================================
 const searchArtists = asyncHandler(async (req, res) => {
 
-   const artists = await searchArtistsService(req.query.q);
+   const query = (req.query.q || '').trim();
+
+   if (!query) {
+      throw new AppError('Search query required', 400);
+   }
+
+   const artists = await searchArtistsService(query);
 
    return res.status(200).json({
       total: artists.length,
@@ -69,7 +243,9 @@ const searchArtists = asyncHandler(async (req, res) => {
    });
 });
 
-// 💿 create album
+// =====================================
+// 💿 CREATE ALBUM
+// =====================================
 const createAlbum = asyncHandler(async (req, res) => {
 
    const album = await createAlbumService({
@@ -84,7 +260,9 @@ const createAlbum = asyncHandler(async (req, res) => {
    });
 });
 
-// 📀 all songs
+// =====================================
+// 📀 ALL SONGS
+// =====================================
 const getAllSongs = asyncHandler(async (req, res) => {
 
    const songs = await getAllSongsService({
@@ -98,7 +276,9 @@ const getAllSongs = asyncHandler(async (req, res) => {
    });
 });
 
-// 📀 all albums
+// =====================================
+// 📀 ALL ALBUMS
+// =====================================
 const getAllAlbums = asyncHandler(async (req, res) => {
 
    const albums = await getAllAlbumsService({
@@ -112,7 +292,9 @@ const getAllAlbums = asyncHandler(async (req, res) => {
    });
 });
 
-// 📀 album by id
+// =====================================
+// 📀 ALBUM BY ID
+// =====================================
 const getAlbumById = asyncHandler(async (req, res) => {
 
    const album = await getAlbumByIdService(req.params.albumId);
@@ -123,7 +305,9 @@ const getAlbumById = asyncHandler(async (req, res) => {
    });
 });
 
-// 🔥 trending songs
+// =====================================
+// 🔥 TRENDING SONGS
+// =====================================
 const getTrendingSongs = asyncHandler(async (req, res) => {
 
    const songs = await getTrendingSongsService();
@@ -134,7 +318,9 @@ const getTrendingSongs = asyncHandler(async (req, res) => {
    });
 });
 
-// 📜 history
+// =====================================
+// 📜 USER HISTORY
+// =====================================
 const getUserHistory = asyncHandler(async (req, res) => {
 
    const history = await getUserHistoryService(req.user.userId);
@@ -144,10 +330,30 @@ const getUserHistory = asyncHandler(async (req, res) => {
       history
    });
 });
+// =====================================
+// 📥 USER DOWNLOAD HISTORY
+// =====================================
+const getMyDownloads = asyncHandler(async (req, res) => {
 
+   const downloads = await getUserDownloads(req.user.userId);
+
+   return res.status(200).json({
+
+      total: downloads.length,
+
+      downloads
+
+   });
+
+});
+// =====================================
+// EXPORTS
+// =====================================
 module.exports = {
    createSong,
    playSong,
+   streamSong,
+   downloadSong,
    searchSongs,
    searchArtists,
    createAlbum,
@@ -155,5 +361,6 @@ module.exports = {
    getAllAlbums,
    getAlbumById,
    getTrendingSongs,
-   getUserHistory
+   getUserHistory,
+   getMyDownloads
 };

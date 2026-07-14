@@ -2,136 +2,141 @@ const mongoose = require('mongoose');
 
 const musicModel = require('../models/music.model');
 const albumModel = require('../models/album.model');
-const LikeModel = require('../models/like.model');
 const HistoryModel = require('../models/history.model');
 const userModel = require('../models/user.model');
 const AppError = require('../utils/appError');
 const { uploadFile } = require('./storage.service');
-
-/**
- * =====================================
- * 🎵 CREATE SONG SERVICE
- * =====================================
- * WHY SAFE:
- * - prevents empty title crash
- * - prevents multer missing file crash
- * - prevents ImageKit upload crash
- */
-const createSongService = async ({ title, file, userId }) => {
-
-   // ❌ WHY: empty string would create invalid DB record
-   if (!title || title.trim() === '') {
-      throw new AppError('Title is required', 400);
-   }
-
-   // ❌ WHY: multer failure OR wrong form-data key = file undefined
-   if (!file || !file.buffer) {
-      throw new AppError('Valid audio file is required', 400);
-   }
-
-   // ❌ WHY: upload APIs often fail if raw buffer is passed incorrectly
-   const base64 = file.buffer.toString('base64');
-
-   const result = await uploadFile(base64, file.originalname);
-
-   // ❌ WHY: avoid silent failure if storage service fails
-   if (!result || !result.url) {
-      throw new AppError('File upload failed', 500);
-   }
-
-   return await musicModel.create({
-      uri: result.url,
-      title: title.trim(),
-      artist: userId
-   });
-};
-
-
-/**
- * =====================================
- * ▶ PLAY SONG SERVICE
- * =====================================
- * WHY:
- * - validates Mongo ID before DB query
- * - prevents invalid ID crash
- */
-const playSongService = async ({ songId, userId }) => {
+// =====================================
+// 🎵 LOAD ACTIVE SONG
+// =====================================
+const getSongById = async (songId) => {
 
    if (!mongoose.Types.ObjectId.isValid(songId)) {
       throw new AppError('Invalid song id', 400);
    }
 
-   const song = await musicModel.findByIdAndUpdate(
-      songId,
-      { $inc: { playCount: 1 } },
-      { new: true }
-   );
+   const song = await musicModel
+      .findOne({
+         _id: songId,
+         deletedAt: null,
+         status: 'active'
+      });
 
    if (!song) {
       throw new AppError('Song not found', 404);
    }
 
+   return song;
+};
+// =====================================
+// 🔒 ESCAPE REGEX (PREVENT ReDoS)
+// =====================================
+const escapeRegex = (text) => {
+   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
+// =====================================
+// 🎵 CREATE SONG SERVICE
+// =====================================
+const createSongService = async ({ title, file, userId }) => {
+
+   if (!title || title.trim() === '') {
+      throw new AppError('Title is required', 400);
+   }
+
+   if (!file || !file.buffer) {
+      throw new AppError('Valid audio file is required', 400);
+   }
+
+   // Pass the raw Buffer.
+   const result = await uploadFile(
+      file.buffer,
+      file.originalname 
+   );
+
+   if (!result || !result.filePath) {
+      throw new AppError('File upload failed', 500);
+   }
+
+   return await musicModel.create({
+      fileId: result.fileId,
+      filePath: result.filePath,
+      title: title.trim(),
+      artist: userId,
+
+      status: 'active',
+      visibility: 'public',
+      premiumOnly: false,
+      allowDownload: true,
+      processingFinished: true
+   });
+};
+
+// =====================================
+// ▶ PLAY SONG SERVICE
+// =====================================
+const playSongService = async ({ songId, userId }) => {
+
+   const song = await getSongById(songId);
+
+   song.playCount += 1;
+   await song.save();
+
    await HistoryModel.create({
       user: userId,
-      song: songId
+      song: song._id
    });
 
    return song;
 };
 
-
-/**
- * =====================================
- * 🔍 SEARCH SONGS
- * =====================================
- * WHY FIXED:
- * - prevents empty query crash
- * - trims input to avoid useless DB scan
- */
+// =====================================
+// 🔍 SEARCH SONGS (SECURE)
+// =====================================
 const searchSongsService = async (q) => {
 
    if (!q || q.trim() === '') {
       throw new AppError('Search query is required', 400);
    }
 
+   // 🔒 Prevent regex injection
+   const safeQuery = escapeRegex(q.trim());
+
    return await musicModel
       .find({
-         title: { $regex: q.trim(), $options: 'i' }
+         title: { $regex: safeQuery, $options: 'i' },
+         status: 'active',
+         deletedAt: null,
+         visibility: 'public'
       })
-      .populate('artist', 'username avatar')
+      .populate('artist', 'username avatar') // ✅ NO EMAIL
       .limit(20)
       .lean();
 };
 
-
-/**
- * =====================================
- * 👤 SEARCH ARTISTS
- * =====================================
- */
+// =====================================
+// 👤 SEARCH ARTISTS (SECURE)
+// =====================================
 const searchArtistsService = async (q) => {
 
    if (!q || q.trim() === '') {
       throw new AppError('Search query is required', 400);
    }
 
+   const safeQuery = escapeRegex(q.trim());
+
    return await userModel.find({
-      username: { $regex: q.trim(), $options: 'i' },
+      username: { $regex: safeQuery, $options: 'i' },
       role: 'artist'
    })
-   .select('username avatar bio')
-   .limit(20)
-   .lean();
+      .select('username avatar bio')
+      .limit(20)
+      .lean();
 };
 
-
-/**
- * =====================================
- * 💿 CREATE ALBUM
- * =====================================
- * WHY FIXED:
- * - ensures musics is array (prevents schema crash)
- */
+// =====================================
+// 💿 CREATE ALBUM
+// =====================================
 const createAlbumService = async ({ title, musics, userId }) => {
 
    if (!title || title.trim() === '') {
@@ -142,6 +147,29 @@ const createAlbumService = async ({ title, musics, userId }) => {
       throw new AppError('Musics must be an array', 400);
    }
 
+   if (musics.length === 0) {
+      throw new AppError('Album must contain at least one song', 400);
+   }
+
+   const songs = await musicModel.find({
+      _id: { $in: musics }
+   });
+
+   if (songs.length !== musics.length) {
+      throw new AppError('One or more songs not found', 404);
+   }
+
+   const foreignSong = songs.find(
+      song => song.artist.toString() !== userId.toString()
+   );
+
+   if (foreignSong) {
+      throw new AppError(
+         'You can only add your own songs to an album',
+         403
+      );
+   }
+
    return await albumModel.create({
       title: title.trim(),
       artist: userId,
@@ -149,29 +177,32 @@ const createAlbumService = async ({ title, musics, userId }) => {
    });
 };
 
-
-/**
- * =====================================
- * 📀 GET ALL SONGS
- * =====================================
- * WHY:
- * - pagination safety (string → number fix)
- */
+// =====================================
+// 📀 GET ALL SONGS (FIXED WITH FILTER)
+// =====================================
 const getAllSongsService = async ({ page = 1, limit = 20 }) => {
 
    const pageNum = Number(page) || 1;
    const limitNum = Number(limit) || 20;
 
+   // === FIX START: Applied exact matching criteria filter to both find and count operations ===
+   const filter = {
+      status: 'active',
+      deletedAt: null,
+      visibility: 'public'
+   };
+
    const [songs, total] = await Promise.all([
       musicModel
-         .find()
-         .populate('artist', 'username email role')
+         .find(filter)
+         .populate('artist', 'username avatar') 
          .sort({ createdAt: -1 })
          .skip((pageNum - 1) * limitNum)
          .limit(limitNum),
 
-      musicModel.countDocuments()
+      musicModel.countDocuments(filter) // ← FIX: counts ONLY matching active songs
    ]);
+   // === FIX END ===
 
    return {
       songs,
@@ -183,53 +214,105 @@ const getAllSongsService = async ({ page = 1, limit = 20 }) => {
    };
 };
 
+// =====================================
+// 📀 GET ALL ALBUMS (FIXED WITH FILTER)
+// =====================================
+const getAllAlbumsService = async ({ page = 1, limit = 20 }) => {
 
-/**
- * =====================================
- * 🔥 TRENDING SONGS
- * =====================================
- * NOTE:
- * - currently only sorted by playCount
- * - can later improve using likes + time decay
- */
+   const pageNum = Number(page) || 1;
+   const limitNum = Number(limit) || 20;
+
+   // === FIX START: Applied exact matching criteria filter to both find and count operations ===
+   const filter = {
+      status: 'active',
+      deletedAt: null
+   };
+
+   const [albums, total] = await Promise.all([
+      albumModel
+         .find(filter)
+         .populate('artist', 'username avatar')
+         .populate('musics', 'title ')
+         .sort({ createdAt: -1 })
+         .skip((pageNum - 1) * limitNum)
+         .limit(limitNum),
+
+      albumModel.countDocuments(filter) // ← FIX: counts ONLY matching active albums
+   ]);
+   // === FIX END ===
+
+   return {
+      albums,
+      pagination: {
+         totalItems: total,
+         currentPage: pageNum,
+         totalPages: Math.ceil(total / limitNum)
+      }
+   };
+};
+// =====================================
+// 📀 GET ALBUM BY ID
+// =====================================
+const getAlbumByIdService = async (albumId) => {
+
+   if (!mongoose.Types.ObjectId.isValid(albumId)) {
+      throw new AppError('Invalid albumId', 400);
+   }
+
+   const album = await albumModel.findById(albumId)
+      .populate('artist', 'username avatar')
+      .populate('musics', 'title  playCount');
+
+   if (!album) {
+      throw new AppError('Album not found', 404);
+   }
+
+   return album;
+};
+
+// =====================================
+// 🔥 TRENDING SONGS
+// =====================================
 const getTrendingSongsService = async () => {
 
    return await musicModel
-      .find()
+      .find({
+         status: 'active',
+         visibility: 'public',
+         isDeleted: false,
+         deletedAt: null
+      })
       .sort({ playCount: -1 })
       .limit(20)
       .populate('artist', 'username')
       .lean();
 };
 
-
-/**
- * =====================================
- * 📜 USER HISTORY
- * =====================================
- */
+// =====================================
+// 📜 USER HISTORY
+// =====================================
 const getUserHistoryService = async (userId) => {
 
    return await HistoryModel
       .find({ user: userId })
       .sort({ createdAt: -1 })
       .limit(20)
-      .populate('song', 'title uri artist');
+      .populate('song', 'title  artist');
 };
 
-
-/**
- * =====================================
- * EXPORTS
- * =====================================
- */
+// =====================================
+// EXPORTS
+// =====================================
 module.exports = {
+   getSongById,
    createSongService,
    playSongService,
    searchSongsService,
    searchArtistsService,
    createAlbumService,
    getAllSongsService,
+   getAllAlbumsService,
+   getAlbumByIdService,
    getTrendingSongsService,
    getUserHistoryService
 };

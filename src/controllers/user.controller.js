@@ -3,7 +3,9 @@ const { validationResult } = require('express-validator');
 const {
    getMyProfileService,
    updateMyProfileService,
-   uploadAvatarService
+   uploadAvatarService,
+   setPasswordService,
+   getMyFeatureFlagsService
 } = require('../services/user.service');
 
 // 👤 GET PROFILE
@@ -37,7 +39,7 @@ const updateMyProfile = asyncHandler(async (req, res) => {
 
 // 🖼️ UPLOAD AVATAR
 const uploadAvatar = asyncHandler(async (req, res) => {
-
+     
    const result = await uploadAvatarService(
       req.user.userId,
       req.file
@@ -48,9 +50,107 @@ const uploadAvatar = asyncHandler(async (req, res) => {
       ...result
    });
 });
+// 🔑 SET PASSWORD
+const setPassword = asyncHandler(
+
+   async (req, res) => {
+
+      const errors =
+         validationResult(req);
+
+      if (!errors.isEmpty()) {
+
+         return res.status(400).json({
+
+            errors:
+               errors.array()
+
+         });
+
+      }
+
+      await setPasswordService(
+
+         req.user.userId,
+
+         req.body.password
+
+      );
+
+      return res.status(200).json({
+
+         success: true,
+
+         message:
+            'Password created successfully'
+
+      });
+
+   }
+
+);
+// =====================================
+// 🎤 REQUEST ARTIST VERIFICATION
+// =====================================
+const requestArtistVerification = asyncHandler(async (req, res) => {
+
+   const { userId } = req.user;
+
+   const user = await require('../models/user.model').findById(userId);
+
+   if (!user) {
+      return res.status(404).json({
+         success: false,
+         message: 'User not found'
+      });
+   }
+
+   // Already an approved artist
+   if (user.role === 'artist') {
+      return res.status(409).json({
+         success: false,
+         message: 'You are already an artist'
+      });
+   }
+
+   // Request already pending
+   if (user.artistVerification.status === 'pending') {
+      return res.status(409).json({
+         success: false,
+         message: 'Artist request already pending'
+      });
+   }
+
+   user.artistVerification.status = 'pending';
+   user.artistVerification.isVerified = false;
+   user.artistRequestAt = new Date();
+
+   await user.save();
+
+   return res.status(200).json({
+      success: true,
+      message: 'Artist request submitted successfully'
+   });
+
+});
+
+// =====================================
+// 🎛 GET MY FEATURE FLAGS (ads / downloads / play limit)
+// =====================================
+const getMyFeatures = asyncHandler(async (req, res) => {
+
+   const features = await getMyFeatureFlagsService(req.user);
+
+   return res.status(200).json({
+      features
+   });
+});
 
 module.exports = {
    getMyProfile,
    updateMyProfile,
-   uploadAvatar
+   uploadAvatar,
+   setPassword,
+   requestArtistVerification,
+   getMyFeatures
 };

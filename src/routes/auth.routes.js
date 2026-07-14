@@ -1,70 +1,116 @@
 const express = require('express');
-const { body } = require('express-validator');
-const authController = require('../controllers/auth.controller');
-const validate = require('../middlewares/validate.middleware');
-const { registerValidation, loginValidation } = require('../validators/auth.validator');
 const router = express.Router();
+const passport = require('passport');
+const crypto = require('crypto');
 
+const authController = require('../controllers/auth.controller');
+
+const {
+   registerValidation,
+   loginValidation
+} = require('../validators/auth.validator');
+
+const {
+   authLimiter,
+   refreshLimiter
+} = require('../middlewares/rateLimit.middleware');
+
+// =====================================
 // REGISTER
+// =====================================
+
 router.post(
    '/register',
-   [
-      body('username')
-         .notEmpty().withMessage('Username is required')
-         .isLength({ min: 3 }).withMessage('Username too short'),
-
-      body('email')
-         .isEmail().withMessage('Invalid email')
-         .normalizeEmail(),
-
-      body('password')
-         .isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
-
-      body('role')
-         .optional()
-         .isIn(['user', 'artist']).withMessage('Invalid role')
-   ],registerValidation,
+   authLimiter,
+   registerValidation,
    authController.registerUser
 );
 
-// LOGIN (FIXED - PRODUCTION VALIDATION)
+// =====================================
+// LOGIN
+// =====================================
+
 router.post(
    '/login',
-   [
-      body('email')
-         .optional()
-         .isEmail()
-         .withMessage('Invalid email'),
-
-      body('username')
-         .optional()
-         .isString()
-         .withMessage('Invalid username'),
-
-      body('password')
-         .notEmpty()
-         .withMessage('Password required')
-         .custom((value, { req }) => {
-            if (!req.body.email && !req.body.username) {
-               throw new Error('Email or username required');
-            }
-            return true;
-         })
-   ],
+   authLimiter,
+   loginValidation,
    authController.loginUser
 );
 
+// =====================================
+// GOOGLE LOGIN
+// =====================================
+
+router.get('/google', (req, res, next) => {
+
+   const state = crypto.randomBytes(32).toString('hex');
+
+   res.cookie('oauth_state', state, {
+      httpOnly: true,
+      secure: false,          // development
+      sameSite: 'lax',
+      maxAge: 10 * 60 * 1000
+   });
+
+   passport.authenticate('google', {
+      scope: ['profile', 'email'],
+      session: false,
+      state: state
+   })(req, res, next);
+
+});
+
+// =====================================
+// GOOGLE CALLBACK
+// =====================================
+
+router.get(
+
+   '/google/callback',
+
+   (req, res, next) => {
+
+      
+      if (
+         !req.query.state ||
+         req.query.state !== req.cookies.oauth_state
+      ) {
+         return res.status(403).json({
+            message: 'OAuth state mismatch'
+         });
+      }
+
+      res.clearCookie('oauth_state');
+
+      next();
+
+   },
+
+   passport.authenticate('google', {
+      session: false
+   }),
+
+   authController.googleLogin
+
+);
+
+// =====================================
 // REFRESH TOKEN
+// =====================================
+
 router.post(
    '/refresh-token',
-   [
-      body('refreshToken')
-         .optional()
-         .isString()
-         .withMessage('Invalid refresh token')
-   ],
-   loginValidation,
+   refreshLimiter,
    authController.refreshAccessToken
 );
-router.post('/logout', authController.logoutUser);
+
+// =====================================
+// LOGOUT
+// =====================================
+
+router.post(
+   '/logout',
+   authController.logoutUser
+);
+
 module.exports = router;

@@ -1,7 +1,15 @@
 const mongoose = require('mongoose');
 
-const  musicSchema = new mongoose.Schema({
-   uri: {
+const musicSchema = new mongoose.Schema({
+
+  
+
+   fileId: {
+      type: String,
+      required: true
+   },
+
+   filePath: {
       type: String,
       required: true
    },
@@ -17,25 +25,70 @@ const  musicSchema = new mongoose.Schema({
       required: true,
       index: true
    },
+   status: {
+      type: String,
+      enum: [
+         'processing',
+         'active',
+         'disabled'
+      ],
+      default: 'processing',
+      index: true
+   },
 
    playCount: {
       type: Number,
       default: 0,
       index: true
-   }
+   },
+   visibility: {
+      type: String,
+      enum: ['public', 'private', 'unlisted'],
+      default: 'public',
+      index: true
+   },
+   premiumOnly: {
+      type: Boolean,
+      default: false,
+      index: true
+   },
+   allowDownload: {
+      type: Boolean,
+      default: true
+   },
+   isDeleted: {
+      type: Boolean,
+      default: false,
+      index: true
+   },
+   processingFinished: {
+      type: Boolean,
+      default: true
+   },
+   disabledReason: {
+      type: String,
+      default: ''
+   },
+
+   deletedAt: {
+      type: Date,
+      default: null
+   },
+
 }, { timestamps: true });
 
-/**
- * 📌 INDEXES (PRODUCTION OPTIMIZATION)
- */
-
-// 1. Fast search by song title
 musicSchema.index({ title: 'text' });
-
-// 2. Fast "artist's songs" fetch + sorting by newest
 musicSchema.index({ artist: 1, createdAt: -1 });
-
-// 3. Trending songs (most played)
 musicSchema.index({ playCount: -1 });
+musicSchema.index({
+   status: 1,
+   visibility: 1,
+   isDeleted: 1
+});
+
+musicSchema.index({
+   artist: 1,
+   status: 1
+});
 
 module.exports = mongoose.model('Music', musicSchema);

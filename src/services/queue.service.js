@@ -16,7 +16,7 @@ const addToQueueService = async ({ userId, songId }) => {
    }
 
    // ✅ CHECK SONG EXISTS
-   const song = await MusicModel.findById(songId);
+   const song = await MusicModel.findById(songId).lean();
    if (!song) {
       throw new AppError('Song not found', 404);
    }
@@ -170,8 +170,6 @@ const allSongsService = async (userId) => {
 
    return queueDoc.queue;
 };
-
-
 /**
  * =========================
  * ❌ CLEAR QUEUE (SAFE RESET)
@@ -203,6 +201,11 @@ const clearQueueService = async (userId) => {
  * 🔀 SHUFFLE
  * =========================
  */
+/**
+ * =========================
+ * 🔀 SHUFFLE
+ * =========================
+ */
 const toggleShuffleService = async ({ userId, shuffle }) => {
 
    if (typeof shuffle !== 'boolean') {
@@ -212,7 +215,9 @@ const toggleShuffleService = async ({ userId, shuffle }) => {
    const queueDoc = await QueueModel.findOneAndUpdate(
       { user: userId },
       { isShuffle: shuffle },
-      { new: true }
+      {
+         returnDocument: 'after'
+      }
    );
 
    if (!queueDoc) {
@@ -239,7 +244,9 @@ const toggleRepeatService = async ({ userId, repeatMode }) => {
    const queueDoc = await QueueModel.findOneAndUpdate(
       { user: userId },
       { repeatMode },
-      { new: true }
+      {
+         returnDocument: 'after'
+      }
    );
 
    if (!queueDoc) {

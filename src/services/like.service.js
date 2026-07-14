@@ -109,7 +109,7 @@ const getSongLikesService = async (songId) => {
    }
 
    // ✅ ensure song exists (important for clean API behavior)
-   const song = await musicModel.findById(songId);
+   const song = await musicModel.findById(songId).lean();
 
    if (!song) {
       throw new AppError('Song not found', 404);

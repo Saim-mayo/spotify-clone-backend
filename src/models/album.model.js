@@ -10,11 +10,41 @@ const albumSchema = new mongoose.Schema(
             ref: 'Music'
          }
       ],
-
       artist: {
          type: mongoose.Schema.Types.ObjectId,
          ref: 'User',
-         required: true
+         required: true,
+         index: true
+      },
+
+      status: {
+         type: String,
+         enum: ['processing', 'active', 'disabled'],
+         default: 'active',
+         index: true
+      },
+
+      visibility: {
+         type: String,
+         enum: ['public', 'private'],
+         default: 'public',
+         index: true
+      },
+
+      isDeleted: {
+         type: Boolean,
+         default: false,
+         index: true
+      },
+
+      deletedAt: {
+         type: Date,
+         default: null
+      },
+
+      disabledReason: {
+         type: String,
+         default: ''
       }
    },
    { timestamps: true } // ✅ IMPORTANT for production sorting
@@ -23,11 +53,15 @@ const albumSchema = new mongoose.Schema(
 
 // 🔥 INDEXES (PRODUCTION LEVEL)
 
-// 1. Fast fetch albums by artist
-albumSchema.index({ artist: 1 });
 
 // 2. Fast latest albums feed
 albumSchema.index({ createdAt: -1 });
+// 2. Fast fetch active albums
+albumSchema.index({
+   status: 1,
+   visibility: 1,
+   isDeleted: 1
+});
 
 // 3. Search albums by title (text search)
 albumSchema.index({ title: "text" });

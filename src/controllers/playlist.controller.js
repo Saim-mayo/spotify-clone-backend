@@ -84,7 +84,7 @@ const getMyPlaylists = asyncHandler(async (req, res) => {
 // 📄 Get playlist by ID
 const getPlaylistById = asyncHandler(async (req, res) => {
 
-   const playlist = await getPlaylistByIdService(req.params.playlistId);
+   const playlist = await getPlaylistByIdService(req.params.playlistId, req.user.userId   );
 
    return res.status(200).json({
       playlist

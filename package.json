@@ -12,19 +12,23 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@imagekit/nodejs": "^7.6.1",
+    "@imagekit/nodejs": "^7.9.1",
     "bcrypt": "^6.0.0",
-    "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "express-validator": "^7.3.2",
-    "helmet": "^8.1.0",
+    "file-type": "^22.0.1",
+    "helmet": "^8.2.0",
     "imagekit": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.5.0",
-    "multer": "^2.1.1"
+    "multer": "^2.1.1",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "rate-limit-mongo": "^2.3.2",
+    "stripe": "^22.2.1"
   }
 }

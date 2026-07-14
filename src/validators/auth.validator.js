@@ -12,12 +12,8 @@ const registerValidation = [
 
    body('password')
       .isLength({ min: 8 })
-      .withMessage('Password must be at least 8 characters'),
+      .withMessage('Password must be at least 8 characters')
 
-   body('role')
-      .optional()
-      .isIn(['user', 'artist'])
-      .withMessage('Invalid role')
 ];
 
 const loginValidation = [
